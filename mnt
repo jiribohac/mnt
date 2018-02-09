@@ -1,0 +1,115 @@
+#!/bin/bash
+
+# A dialog-based TUI for mounting removable devices using UDisks2
+# Lists all mounted / mountable filesystems reported by
+# udisksctl dump in a dialog-generated menu and 
+# mounts/unmounts the selected filesystem using udisksctl [un]mount -b
+
+which dialog >/dev/null 2>/dev/null || {
+	echo "this script requires the dialog program"
+	exit 1
+}
+
+function conv_to_human
+{
+	n="$1"
+	[[ $((n < 1048576 )) == 1 ]] && { echo -n "$n B"; return; }
+	n=$((n >> 10));
+	[[ $((n < 1048576 )) == 1 ]] && { echo -n "$n KiB"; return; }
+	n=$((n >> 10));
+	[[ $((n < 1048576 )) == 1 ]] && { echo -n "$n MiB"; return; }
+	n=$((n >> 10));
+	[[ $((n < 1048576 )) == 1 ]] && { echo -n "$n GiB"; return; }
+	n=$((n >> 10));
+	[[ $((n < 1048576 )) == 1 ]] && { echo -n "$n TiB"; return; }
+}
+
+
+#convert the output of udisks to parameters of dialog
+function udisks_to_dialog
+{
+	count=0
+	#print parameters for one menu item
+	function output_one
+	{
+		[[ -z "$device" ]] && return
+		[[ x$auto == xtrue ]] || return
+		[[ x$filesystem == xtrue ]] || return
+		sz=`conv_to_human $size`
+
+		#print before the first item, but only if we have at least one item	
+		[[ $count == 0 ]] && {
+			echo "--menu"
+			echo "Pick a filesystem to mount/unmount:" 
+			echo 0
+			echo 0
+			echo 0
+		}
+		
+
+		if [[ -z "$mountpoint" ]]; then 
+			echo "mount -b $device"
+			echo "mount   $device (${label:-no label}, ${id:-no id}, $sz)"
+		else
+			echo "unmount -b $device"
+			echo "unmount $device (mounted on $mountpoint, $sz)"
+		fi
+		count=$((count+1))
+	}
+
+	while read a b c; do
+		case "$a" in
+			/org/freedesktop/UDisks2/*)
+				#new item, print the previous one and reset values
+				output_one
+				mountpoint="";
+				device="";
+				label="";
+				id="";
+				auto="";
+				filesystem="";
+				size="";
+				;;
+			MountPoints: )
+				mountpoint="$b"
+				filesystem=true;
+				;;
+			Device: )
+				device="$b"
+				;;
+			Id: )
+				id="$b"
+				;;
+			IdLabel: )
+				label="$b"
+				;;
+			HintAuto: )
+				auto="$b"
+				;;
+			Size: )
+				size="$b"
+				;;
+		esac
+	done
+	#print the last item
+	output_one
+
+	#print if there were no items
+	[[ $count == 0 ]] && {
+		echo "--infobox"
+		echo "no user-mountable filesystems found"
+		echo 0
+		echo 0
+	}
+} 
+
+export DIALOG_ESC=1
+
+udisksctl dump |
+udisks_to_dialog |
+xargs -d'\n' dialog  --title "Mount and unmount filesystems"  --no-tags --stdout |
+{
+	read command p1 p2
+	[[ -z $command ]] || udisksctl "$command" "$p1" "$p2"
+}
+echo
